@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gesture Particles</title>
+    
+    <!-- CSS Framework -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM (UMD Globals) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Three.js (UMD Global) -->
+    <script crossorigin src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    
+    <!-- MediaPipe Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      body { margin: 0; overflow: hidden; background-color: #050505; color: white; }
+      canvas { display: block; }
+      
+      .glass-panel {
+        background: rgba(20, 20, 20, 0.6);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useRef, useCallback } = React;
+
+      // --- CONSTANTS & UTILS ---
+
+      const ShapeType = {
+        SPHERE: 'Sphere',
+        HEART: 'Heart',
+        FLOWER: 'Flower',
+        SATURN: 'Saturn',
+        BUDDHA: 'Meditate',
+        FIREWORKS: 'Burst',
+        DNA: 'Helix'
+      };
+
+      const generateShapePositions = (type, count) => {
+        const positions = new Float32Array(count * 3);
+        const vec = new THREE.Vector3();
+
+        for (let i = 0; i < count; i++) {
+          const i3 = i * 3;
+          vec.set(0, 0, 0);
+
+          const t = i / count; 
+          const phi = Math.acos(-1 + (2 * i) / count);
+          const theta = Math.sqrt(count * Math.PI) * phi;
+
+          switch (type) {
+            case ShapeType.SPHERE:
+              vec.setFromSphericalCoords(4, phi, theta);
+              break;
+            case ShapeType.HEART:
+              const range = Math.PI * 2;
+              const angle = Math.random() * range;
+              const s = 0.25; 
+              const x = 16 * Math.pow(Math.sin(angle), 3);
+              const y = 13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle);
+              vec.set(x * s, y * s, (Math.random() - 0.5) * 2);
+              vec.multiplyScalar(0.8 + Math.random() * 0.4);
+              break;
+            case ShapeType.FLOWER:
+              const k = 4;
+              const fAngle = Math.random() * Math.PI * 2;
+              const radius = 3 * Math.cos(k * fAngle) + 1;
+              vec.set(
+                radius * Math.cos(fAngle),
+                radius * Math.sin(fAngle),
+                Math.sin(radius * 2) * 1.5
+              );
+              break;
+            case ShapeType.SATURN:
+              if (Math.random() > 0.4) {
+                vec.setFromSphericalCoords(2.5, phi, theta);
+              } else {
+                const sAngle = Math.random() * Math.PI * 2;
+                const dist = 3.5 + Math.random() * 2.5;
+                vec.set(Math.cos(sAngle) * dist, (Math.random() - 0.5) * 0.2, Math.sin(sAngle) * dist);
+                vec.applyAxisAngle(new THREE.Vector3(1, 0, 1).normalize(), Math.PI / 6);
+              }
+              break;
+            case ShapeType.BUDDHA:
+              const r = Math.random();
+              if (r < 0.25) { // Head
+                  vec.setFromSphericalCoords(0.8, phi, theta);
+                  vec.y += 2.5;
+              } else if (r < 0.65) { // Body
+                  vec.setFromSphericalCoords(1.5, phi, theta);
+                  vec.x *= 1.2;
+                  vec.y += 0.5;
+              } else { // Legs
+                  const bAngle = Math.random() * Math.PI * 2;
+                  const legR = 2.0 + Math.random() * 1.5;
+                  vec.set(Math.cos(bAngle) * legR, (Math.random() - 0.5) * 0.5 - 1.5, Math.sin(bAngle) * legR);
+              }
+              break;
+            case ShapeType.FIREWORKS:
+              vec.randomDirection();
+              vec.multiplyScalar(Math.random() * 6);
+              break;
+            case ShapeType.DNA:
+              const h = (Math.random() - 0.5) * 10;
+              const dAngle = h * 2;
+              const dRadius = 2;
+              const offset = Math.random() > 0.5 ? 0 : Math.PI;
+              vec.set(
+                  Math.cos(dAngle + offset) * dRadius,
+                  h,
+                  Math.sin(dAngle + offset) * dRadius
+              );
+              vec.add(new THREE.Vector3((Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5));
+              break;
+            default:
+              vec.setFromSphericalCoords(4, phi, theta);
+          }
+          positions[i3] = vec.x;
+          positions[i3 + 1] = vec.y;
+          positions[i3 + 2] = vec.z;
+        }
+        return positions;
+      };
+
+      // --- HOOKS ---
+
+      const useAudioAnalysis = () => {
+        const [isReady, setIsReady] = useState(false);
+        const [error, setError] = useState(null);
+        
+        const audioContextRef = useRef(null);
+        const analyserRef = useRef(null);
+        const dataArrayRef = useRef(null);
+        const sourceRef = useRef(null);
+        const lastVolumeRef = useRef(0);
+        const beatThreshold = 1.15;
+
+        const initAudio = useCallback(async () => {
+          if (audioContextRef.current) return;
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const audioCtx = new AudioContextClass();
+            const analyser = audioCtx.createAnalyser();
+            
+            analyser.fftSize = 256;
+            const source = audioCtx.createMediaStreamSource(stream);
+            source.connect(analyser);
+
+            audioContextRef.current = audioCtx;
+            analyserRef.current = analyser;
+            sourceRef.current = source;
+            dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+            
+            setIsReady(true);
+            setError(null);
+          } catch (err) {
+            console.error("Audio init error", err);
+            setError("Microphone access denied or unavailable.");
+          }
+        }, []);
+
+        const getAudioData = () => {
+          if (!analyserRef.current || !dataArrayRef.current) return { volume: 0, isBeat: false };
+
+          analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+          
+          let sum = 0;
+          const len = dataArrayRef.current.length;
+          for (let i = 0; i < len; i++) sum += dataArrayRef.current[i];
+          const normalizedVolume = (sum / len) / 255;
+
+          const isBeat = normalizedVolume > lastVolumeRef.current * beatThreshold && normalizedVolume > 0.1;
+          lastVolumeRef.current = lastVolumeRef.current * 0.9 + normalizedVolume * 0.1;
+
+          return { volume: normalizedVolume, isBeat };
+        };
+
+        useEffect(() => {
+          return () => {
+            if (audioContextRef.current) audioContextRef.current.close();
+            if (sourceRef.current) sourceRef.current.disconnect();
+          };
+        }, []);
+
+        return { initAudio, isReady, error, getAudioData };
+      };
+
+      const useHandTracking = () => {
+        const [isReady, setIsReady] = useState(false);
+        const [error, setError] = useState(null);
+        const tensionRef = useRef(0.5);
+        const videoRef = useRef(null);
+
+        useEffect(() => {
+          const videoElement = document.createElement('video');
+          videoElement.style.display = 'none';
+          document.body.appendChild(videoElement);
+          videoRef.current = videoElement;
+
+          let hands;
+          let camera;
+
+          const onResults = (results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+              const landmarks = results.multiHandLandmarks[0];
+              const wrist = landmarks[0];
+              const tips = [4, 8, 12, 16, 20];
+              
+              let totalDist = 0;
+              tips.forEach((tipIdx) => {
+                  const tip = landmarks[tipIdx];
+                  const d = Math.sqrt(
+                      Math.pow(tip.x - wrist.x, 2) + 
+                      Math.pow(tip.y - wrist.y, 2) + 
+                      Math.pow(tip.z - wrist.z, 2)
+                  );
+                  totalDist += d;
+              });
+
+              const avgDist = totalDist / 5;
+              const minVal = 0.15;
+              const maxVal = 0.45;
+              let t = (avgDist - minVal) / (maxVal - minVal);
+              t = Math.max(0, Math.min(1, t));
+              
+              tensionRef.current = tensionRef.current * 0.8 + t * 0.2;
+            } else {
+              tensionRef.current = tensionRef.current * 0.95 + 0.5 * 0.05;
+            }
+          };
+
+          const init = async () => {
+            if (!window.Hands || !window.Camera) {
+              setError("MediaPipe libraries not loaded.");
+              return;
+            }
+
+            try {
+              hands = new window.Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+              hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+              hands.onResults(onResults);
+
+              camera = new window.Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 640, height: 480
+              });
+
+              await camera.start();
+              setIsReady(true);
+            } catch (err) {
+              console.error(err);
+              setError("Failed to start camera.");
+            }
+          };
+
+          const timeout = setTimeout(init, 1000);
+          return () => {
+            clearTimeout(timeout);
+            if (camera) camera.stop();
+            if (hands) hands.close();
+            if (videoElement && document.body.contains(videoElement)) {
+              document.body.removeChild(videoElement);
+            }
+          };
+        }, []);
+
+        return { isReady, error, getTension: () => tensionRef.current };
+      };
+
+      // --- COMPONENTS ---
+
+      const ParticleSystem = ({ controlState, getAudioData, getHandTension }) => {
+        const mountRef = useRef(null);
+        const refs = useRef(null);
+
+        useEffect(() => {
+          if (!mountRef.current) return;
+
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+
+          // SETUP
+          const scene = new THREE.Scene();
+          scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+          const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+          camera.position.z = 8;
+
+          const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+          renderer.setSize(width, height);
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          mountRef.current.appendChild(renderer.domElement);
+
+          // GEOMETRY
+          const count = controlState.particleCount;
+          const geometry = new THREE.BufferGeometry();
+          const currentPositions = new Float32Array(count * 3);
+          const targetPositions = generateShapePositions(controlState.shape, count);
+          
+          for (let i = 0; i < count * 3; i++) currentPositions[i] = (Math.random() - 0.5) * 20;
+
+          geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+          
+          // MATERIAL
+          const sprite = new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/disc.png');
+          const material = new THREE.PointsMaterial({
+            color: controlState.color,
+            size: 0.1,
+            map: sprite,
+            sizeAttenuation: true,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+
+          const points = new THREE.Points(geometry, material);
+          scene.add(points);
+
+          refs.current = {
+            scene, camera, renderer, geometry, material, points,
+            targetPositions, currentPositions, 
+            frameId: 0
+          };
+
+          const handleResize = () => {
+            if (!refs.current) return;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            refs.current.camera.aspect = w / h;
+            refs.current.camera.updateProjectionMatrix();
+            refs.current.renderer.setSize(w, h);
+          };
+          window.addEventListener('resize', handleResize);
+
+          return () => {
+            window.removeEventListener('resize', handleResize);
+            if (mountRef.current && refs.current) {
+              mountRef.current.removeChild(refs.current.renderer.domElement);
+            }
+            if (refs.current) {
+              cancelAnimationFrame(refs.current.frameId);
+              refs.current.geometry.dispose();
+              refs.current.material.dispose();
+            }
+          };
+        }, []);
+
+        // Update Targets
+        useEffect(() => {
+          if (!refs.current) return;
+          const newTargets = generateShapePositions(controlState.shape, controlState.particleCount);
+          refs.current.targetPositions.set(newTargets);
+        }, [controlState.shape, controlState.particleCount]);
+
+        // Update Color
+        useEffect(() => {
+          if (!refs.current) return;
+          refs.current.material.color.set(controlState.color);
+        }, [controlState.color]);
+
+        // Loop
+        useEffect(() => {
+          if (!refs.current) return;
+
+          let time = 0;
+          const animate = () => {
+            if (!refs.current) return;
+
+            const { 
+              scene, camera, renderer, geometry, material, points,
+              currentPositions, targetPositions 
+            } = refs.current;
+
+            let { volume, isBeat } = getAudioData();
+            let tension = getHandTension();
+
+            // Safety Checks
+            if (!Number.isFinite(volume)) volume = 0;
+            if (!Number.isFinite(tension)) tension = 0.5;
+
+            const expansionFactor = 0.5 + (tension * 2.0) + (volume * 1.5);
+            const rotationSpeed = 0.001 + (1.0 - tension) * 0.005 + (volume * 0.01);
+            
+            points.rotation.y += rotationSpeed;
+            points.rotation.z += rotationSpeed * 0.5;
+
+            material.size = isBeat 
+              ? 0.2 + volume * 0.3 
+              : THREE.MathUtils.lerp(material.size, 0.1 + volume * 0.1, 0.1);
+
+            const positions = geometry.attributes.position.array;
+
+            for (let i = 0; i < controlState.particleCount; i++) {
+              const i3 = i * 3;
+              
+              const tx = targetPositions[i3];
+              const ty = targetPositions[i3 + 1];
+              const tz = targetPositions[i3 + 2];
+
+              const targetX = tx * expansionFactor;
+              const targetY = ty * expansionFactor;
+              const targetZ = tz * expansionFactor;
+
+              let x = currentPositions[i3];
+              let y = currentPositions[i3 + 1];
+              let z = currentPositions[i3 + 2];
+
+              const lerpSpeed = 0.05 + (volume * 0.1);
+              x += (targetX - x) * lerpSpeed;
+              y += (targetY - y) * lerpSpeed;
+              z += (targetZ - z) * lerpSpeed;
+
+              if (volume > 0.01) {
+                  x += (Math.random() - 0.5) * volume * 0.2;
+                  y += (Math.random() - 0.5) * volume * 0.2;
+                  z += (Math.random() - 0.5) * volume * 0.2;
+              }
+
+              if (isBeat) {
+                   const dir = new THREE.Vector3(x, y, z).normalize();
+                   x += dir.x * 0.5;
+                   y += dir.y * 0.5;
+                   z += dir.z * 0.5;
+              }
+
+              currentPositions[i3] = x;
+              currentPositions[i3 + 1] = y;
+              currentPositions[i3 + 2] = z;
+
+              positions[i3] = x;
+              positions[i3 + 1] = y;
+              positions[i3 + 2] = z;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            
+            time += 0.005;
+            camera.position.x = Math.sin(time) * 1;
+            camera.position.y = Math.cos(time * 0.7) * 1;
+            camera.lookAt(0, 0, 0);
+
+            renderer.render(scene, camera);
+            refs.current.frameId = requestAnimationFrame(animate);
+          };
+
+          refs.current.frameId = requestAnimationFrame(animate);
+
+          return () => {
+             if (refs.current) cancelAnimationFrame(refs.current.frameId);
+          };
+        }, []); 
+
+        return <div ref={mountRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 1 }} />;
+      };
+
+      const App = () => {
+        const [started, setStarted] = useState(false);
+        const { isReady: isHandReady, error: handError, getTension } = useHandTracking();
+        const { initAudio, isReady: isAudioReady, error: audioError, getAudioData } = useAudioAnalysis();
+        const [controlState, setControlState] = useState({
+          shape: ShapeType.SPHERE,
+          color: '#00ffff',
+          particleCount: 2000
+        });
+
+        const handleStart = async () => {
+          await initAudio();
+          setStarted(true);
+        };
+
+        const shapes = Object.values(ShapeType);
+
+        return (
+          <div className="relative w-full h-screen overflow-hidden font-sans text-white bg-black">
+            
+            {started && (
+              <ParticleSystem 
+                controlState={controlState}
+                getAudioData={getAudioData}
+                getHandTension={getTension}
+              />
+            )}
+
+            {!started && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-50">
+                <h1 className="text-5xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-600">
+                  Gesture Particles
+                </h1>
+                <p className="max-w-md text-center text-gray-300 mb-8">
+                  Experience an interactive particle system controlled by your hand movements and microphone audio.
+                </p>
+                <button onClick={handleStart} className="px-8 py-3 bg-white text-black font-bold rounded-full hover:bg-gray-200 transition transform hover:scale-105">
+                  Start Experience
+                </button>
+                <div className="mt-8 text-sm text-gray-500">
+                   {handError && <div className="text-red-500">Hand Tracking: {handError}</div>}
+                   {!isHandReady && !handError && <div className="animate-pulse">Loading Hand Tracking models...</div>}
+                   {isHandReady && <div className="text-green-500">Hand Tracking Ready</div>}
+                </div>
+              </div>
+            )}
+
+            {started && (
+              <div className="absolute top-4 right-4 w-64 glass-panel rounded-xl p-4 z-50">
+                <div className="mb-6">
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Shape Template</h2>
+                  <div className="grid grid-cols-2 gap-2">
+                    {shapes.map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setControlState(prev => ({ ...prev, shape: s }))}
+                        className={`text-sm py-1 px-2 rounded border transition-colors ${
+                          controlState.shape === s ? 'bg-white/20 border-white text-white' : 'border-transparent text-gray-400 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Color</h2>
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="color" 
+                      value={controlState.color}
+                      onChange={(e) => setControlState(prev => ({ ...prev, color: e.target.value }))}
+                      className="w-10 h-10 rounded cursor-pointer border-none bg-transparent"
+                    />
+                    <span className="text-sm font-mono text-gray-300">{controlState.color}</span>
+                  </div>
+                </div>
+                
+                <div className="mt-4 pt-2 border-t border-white/10 text-xs text-gray-500">
+                   <div>Audio: {isAudioReady ? "Active" : "..."}</div>
+                   <div>Hands: {isHandReady ? "Active" : "..."}</div>
+                </div>
+              </div>
+            )}
+            
+            {started && isHandReady && (
+              <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 text-center pointer-events-none z-40">
+                <p className="text-white/50 text-sm animate-pulse">Open/Close hand to expand • Make noise to pulse</p>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
